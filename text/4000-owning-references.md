@@ -85,7 +85,7 @@ While further discussion (including [pre-RFC discussion](https://rust-lang.zulip
 
 A number of things have changed since the last proposals:
 - After over 10 years of Rust, it is no longer "too soon" to add another fundamental reference type.
-- The `unsized_rvalues` RFC has been merged, and demonstrated the challenges with handling unsized values implictly.
+- The `unsized_rvalues` RFC has been merged, and demonstrated the challenges with handling unsized values implicitly.
 - We have prior art in external crates, which show that pure library implementations are not sufficient.
 - Non-movable types have become important in Rust (`async`-like self-referential types)
 
@@ -293,7 +293,7 @@ print_all(&own [
 ]);
 ```
 
-Due to thier owning nature, in some cases a `&own T` behaves more like a `Box<T>` than a `&mut T`.
+Due to their owning nature, in some cases a `&own T` behaves more like a `Box<T>` than a `&mut T`.
 For example, in order to mutate value inside an owned reference, the reference itself must be mutable:
 ```rust
 let value = 42;
@@ -351,6 +351,11 @@ The following expressions can be owned place expression contexts:
 
 When using the borrow expression on a value expression, the behavior is analogous to that of other borrow expressions. 
 
+#### Borrowing `Copy` places
+
+Currently, when a place of type `T: Copy` is moved out of, the compiler performs a copy instead, leaving the original value untouched.
+To be consistent, moving out of a place via an owning borrow `&own place` would move out of the place, even if it could be copied.
+
 ### Properties
 
 The type `&'a own T` behaves similar like other references, except it owns the value of the pointee:
@@ -388,7 +393,7 @@ One challenge here is, that owning references are not borrows like the other two
 After a borrow expires, you can keep using the original value.
 But with owning references, once the borrow expires, the original value is gone.
 
-On the one hand, we believe that we do not need to bother Rust beginners with owning references.
+We believe that we do not need to bother Rust beginners with owning references.
 [The Rust Book](https://doc.rust-lang.org/book/ch15-00-smart-pointers.html), addresses the current primary alternative `Box` only in chapter 15, and owning references would be considered similar advanced usage.
 However, we would still need to adjust teaching to mention a third reference type, to be explained later.
 
@@ -424,13 +429,14 @@ However, as stated by [the `stackbox` maintaner themselves](https://internals.ru
 
 Additionally, a library type cannot directly benefit from compiler optimizations such as `noalias` and `dereferencable`.
 This can't currently be done soundly with a `Box`, since `noalias` does not work with custom allocators.
+Library implementations also share some challenges with [Alternative: Model as `Box<T, NoOp<'a>>`](#alternative-model-as-boxt-noopa).
 
 ### Alternative: Syntax options
 
 While many prior discussions use the `&own` notation, other options are available:
 
 - `&move` has been used in the past, indicating the "movement of ownership".
-    - We believe that this syntax isn't as clear in the implied semantics, as reference types, including this one, do very much not move the referee when they are themselves moved.
+    - However, it may be confused with "moving the value", which it crucially does not.
     - This could re-use the existing `move` keyword
         - However, there is ambiguity with closures: `&move || { }`
 - `&ref(own)` does not require a contextual keyword
@@ -439,6 +445,7 @@ While many prior discussions use the `&own` notation, other options are availabl
 - `Own<'_, T>` could use normal type syntax, avoiding additional parsing complexity.
     - This would visually more closely resemble `Box` rather than other reference types
     - It is unclear how the borrow syntax would work in this case
+        - It would likely end up being the same as custom references, which is currently considering `@Own expression`.
 
 ### Alternative: Wait for custom references
 
@@ -451,7 +458,7 @@ Additionally, most of the work that goes into owning references would need to ha
 
 ### Alternative: Model as `Box<T, NoOp<'a>>`
 
-Semantically, `&own` is identical to `Box<T, NoOp<'a>>`, where `NoOp<'a>` is a zero-sized `Allocator`, which cannot perform allocations and does nothing on deallocations.
+Semantically, `&own` is very similar to `Box<T, NoOp<'a>>`, where `NoOp<'a>` is a zero-sized `Allocator`, which cannot perform allocations and does nothing on deallocations.
 A type alias could be used to name this type `Own<'a, T>`.
 With this alternative, a macro would be used to create an owning reference to a place, such as `own!(place)` instead of `&own place`.
 
@@ -461,6 +468,7 @@ However, there are a number of downsides to this approach:
 - The `Box` API is too general.
   For example, `Box::allocator` would have to return the `Noop` allocator, which cannot allocate memory and therefore will have to panic on most methods.
   This would be a hazard for allocator agnostic code.
+  (This may be alleviated by further work on the allocator API, such as a `Deallocator` trait.)
 - There might be subtle differences in the types that are currently unknown. 
   For example, we might want different aliasing rules for the types.
 - `Box` is (currently) not available in `no_std` (unless `alloc` is enabled), so APIs compatible with `no_std` cannot take `Box` as an argument.
@@ -683,6 +691,10 @@ With this design, futures are able to produce their final output by moving out o
 It is statically guaranteed that they cannot be polled again.
 
 Self-referential futures `F: !Move` prevent using `Self` directly, but `&own Self` preserves the ownership-passing semantics while being movable due to the indirection.
+
+> Note: This is not a suggestion for changing `Future` into this trait, but rather to show how `&own` can be useful for describing similar APIs.
+> Additionally, while this API allows conditionally consuming an immovable value, it does not necessarily perform in-place-mutation, since the returned reference may point to a different allocation.
+> Fixing this would require advanced place-branding concepts, such as those discussed for in-place initialization via out-pointers.
 
 ### Change `FnOnce` to use `&own`, replacing `unsized_fn_params`
 
