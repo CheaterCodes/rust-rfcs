@@ -354,7 +354,53 @@ When using the borrow expression on a value expression, the behavior is analogou
 #### Borrowing `Copy` places
 
 Currently, when a place of type `T: Copy` is moved out of, the compiler performs a copy instead, leaving the original value untouched.
-To be consistent, moving out of a place via an owning borrow `&own place` would move out of the place, even if it could be copied.
+However, moving out of a place via an owning borrow `&own place` moves out of the place, even if it could be copied.
+
+```rs
+let x = 5u32;
+{
+    let mut owned = &own x;
+    *owned += 2;
+}
+assert_eq!(x, 5); // Error: Use of moved value
+```
+
+<details>
+<summary>Reasoning</summary>
+
+There are two alternatives to moving out of `Copy` places:
+- Copy the value into a temporary place and then borrow the temporary.
+  This disallows using the full lifetime of the place.
+  Additionally, the current proposal can already express this as `&own { place }`.
+- Mutate the place when `T: Copy` and guarantee that it is valid once the borrow expires.
+
+The problem with the second approach is less obvious, but demonstrated with the following example:
+```rs
+// Create some long-lived value
+let mut outer_str: &'static str = "Some string";
+{
+    // Create an owned reference to s
+    let borrow_outer: &own &'static str = &own outer_string;
+
+    // Create a short-lived local
+    let local = String::from("Some other string");
+
+    // Use covariance to shorten the lifetime
+    // Note: 'local is made-up syntax, but the same can be achieved in today's Rust.
+    let borrow_local: &own &'local str = borrow_outer;
+
+    // Assign to `outer_str` via the shortened reference.
+    *borrow_local = local;
+}
+// UB: This now reads from an out-of-scope local
+dbg!(outer_str);
+```
+
+In short:
+`&mut T` is *invariant* in `T` to prevent code like this example.
+Since `&own T` is *covariant* in `T`, we instead prevent reading the value even after the borrow expires.
+
+</details>
 
 ### Properties
 
@@ -553,44 +599,6 @@ This is allowed with other references, so it seems reasonable to allow this here
 However, this operation additionally causes a deferred drop of the pointee as a side-effect.
 
 As an alternative, we could disallow this behavior (for now), and instead introduce some more explicitly named function `unsafe fn assume_owned<'a, T>(ptr: *mut T) -> &own T`.
-
-### How does `&own place` work if `place: Copy`?
-
-As per the design, taking an owning reference to a place means that the place may be mutated and will be considered moved out of.
-This results in some possibly unexpected interactions.
-Currently it is not possible in rust to move out of a place which is `Copy`, since we will always just copy the value instead.
-So this behavior is consistent, but might be surprising (and new in the Rust language):
-
-```rs
-let x = 5u32;
-{
-    let mut owned = &own x;
-    *owned += 2;
-}
-assert_eq!(x, 5); // Error: Use of moved value
-```
-
-If we consider the place not moved out, the referee may be modified after the borrow ends (the assert would fail at runtime), which would indicate that we require a `mut` binding.
-```rs
-let mut x = 5u32;
-{
-    let mut owned = &own x;
-    *owned += 2;
-}
-assert_eq!(x, 5); // Assertion failed; 7 != 5
-```
-
-However, if we want to avoid moving out of a `Copy` place, we can borrow a (lifetime extended) temporary instead:
-```rs
-let x = 5u32;
-{
-    let mut owned = &own { x };
-    *owned += 2;
-}
-assert_eq!(x, 5); // Now the assertion passes
-```
-
-We suggest that an owning borrow should move out of a place, regardless of its type, since it is likely the simpler implementation, and strinctly more powerful.
 
 ## Future possibilities
 [future-possibilities]: #future-possibilities
